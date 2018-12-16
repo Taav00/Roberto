@@ -23,6 +23,7 @@ Configuration commands:
 | 5       | Change mode                                     | 0 = automatic, 1 = manual |
 | 6       | Change type                                     | 0 = Ricard, 1 = syrup     |
 | 7       | Enable debug mode                               |                           |
+| 8       | Cleaning mode                              |                           |
 
 So for example to set the pouring time the user first sends `1` to select the command and then sends the pouring time in milliseconds (ex: `2000`).
 

@@ -1,8 +1,8 @@
 /***************************************************************************************
  *
  * Title:       Roberto, the pastis serving robot
- * Version:     v1.0
- * Date:        2014-05-27
+ * Version:     v1.2
+ * Date:        2018-12-16
  * Author:      Karl Kangur <karl.kangur@gmail.com>
  * Website:     https://github.com/Robopoly/Roberto
  * Licence:     LGPL
@@ -13,6 +13,7 @@
 #include <EEPROM.h>
 #include "Roberto.h"
 #include <robopolyLCD.h>
+#include "HX711.h"        //for the loadcell : https://learn.sparkfun.com/tutorials/load-cell-amplifier-hx711-breakout-hookup-guide
 
 Servo servoEarLeft;
 Servo servoEarRight;
@@ -49,7 +50,7 @@ struct transition state_transitions[] = {
   {STATE_POURING,              OK,     STATE_MOVING_RIGHT_ARM_OUT},
   {STATE_POURING,              FAIL,   STATE_MOVING_ARMS_OUT},
   {STATE_MOVING_RIGHT_ARM_OUT, OK,     STATE_REMOVE_CUP},
-  {STATE_REMOVE_CUP,           OK    , STATE_MOVING_ARMS_OUT},
+  {STATE_REMOVE_CUP,           OK, STATE_MOVING_ARMS_OUT},
   {STATE_REMOVE_CUP,           REPEAT, STATE_REMOVE_CUP},
   {STATE_MOVING_ARMS_OUT,      OK,     STATE_WAITING_CUP}
 };
@@ -61,25 +62,44 @@ enum return_codes returnCode;
 return_codes (*stateFunction)(void);
 
 // time from start of liquid pouring in milliseconds
-uint16_t pouringTime;
+uint16_t pouredWeight;
 uint8_t liquidType;
 uint8_t servingMode;
 uint8_t debugMode;
 
+HX711 scale(INPUT_SCALE_DAT, INPUT_SCALE_CLK);            //!!!!!!!!
+
+float calibration_factor = 6260;                //Calibration factor found by test on the SparkFun Calibration program ///!!!!!!!!
+
+bool pastis;
+
 void setup()
-{
+{S
+  pinMode(OUTPUT_PUMP_1, OUTPUT);
+  pinMode(OUTPUT_PUMP_2, OUTPUT);
+  pinMode(OUTPUT_EYE_LEFT_RED, OUTPUT);
+  pinMode(OUTPUT_EYE_LEFT_GREEN, OUTPUT);
+  pinMode(OUTPUT_EYE_LEFT_BLUE, OUTPUT);
+  pinMode(OUTPUT_EYE_RIGHT_RED, OUTPUT);
+  pinMode(OUTPUT_EYE_RIGHT_GREEN, OUTPUT);
+  pinMode(OUTPUT_EYE_RIGHT_BLUE, OUTPUT);
+
+  pinMode(INPUT_ARM_CONTACT, INPUT);
+  pinMode(INPUT_BUTTON_1, INPUT);
+  pinMode(INPUT_BUTTON_2, INPUT);
   // light up the eyes in red (debug)
   eyes(1, 0, 0);
+
   
   // set up serial communication for debug and configuration
   Serial.begin(9600);
   
   // configure servo motors
-  servoArmLeft.attach(4);
-  servoArmRight.attach(5);
-  servoBowTie.attach(6);
-  servoEarRight.attach(8);
-  servoEarLeft.attach(7);
+  servoArmLeft.attach(OUTPUT_SERVO_ARM_LEFT);
+  servoArmRight.attach(OUTPUT_SERVO_ARM_RIGHT);
+  servoBowTie.attach(OUTPUT_SERVO_BOWTIE);
+  servoEarRight.attach(OUTPUT_SERVO_RIGHT_EAR);
+  servoEarLeft.attach(OUTPUT_SERVO_LEFT_EAR);
   
   // initialise servo positions
   servoArmLeft.write(SERVO_ARM_LEFT_OPEN);
@@ -88,20 +108,23 @@ void setup()
   servoEarRight.write(SERVO_EAR_RIGHT_CENTER);
   servoEarLeft.write(SERVO_EAR_LEFT_CENTER);
   
-  // set port modes
-  pinMode(LED, OUTPUT);
-  pinMode(OUTPUT_PUMP, OUTPUT);
-  pinMode(OUTPUT_EYE_LEFT_RED, OUTPUT);
-  pinMode(OUTPUT_EYE_LEFT_GREEN, OUTPUT);
-  pinMode(OUTPUT_EYE_LEFT_BLUE, OUTPUT);
-  pinMode(OUTPUT_EYE_RIGHT_RED, OUTPUT);
-  pinMode(OUTPUT_EYE_RIGHT_GREEN, OUTPUT);
-  pinMode(OUTPUT_EYE_RIGHT_BLUE, OUTPUT);
+
   
   // load data from memory
-  pouringTime = (EEPROM.read(EEPROM_POURING_TIME) << 8) | EEPROM.read(EEPROM_POURING_TIME + 1);
+  pouredWeight = (EEPROM.read(EEPROM_POURING_TIME) << 8) | EEPROM.read(EEPROM_POURING_TIME + 1);
   liquidType = EEPROM.read(EEPROM_TYPE);
   servingMode = EEPROM.read(EEPROM_MODE);
+
+
+  // check the values we just read...
+  if(pouredWeight < 0 || pouredWeight > MAX_POURED_WEIGHT)
+    pouredWeight = DEFAULT_POURED_WEIGHT;
+
+  if(liquidType < 0 || liquidType > 1)
+    liquidType = 0;
+  if(servingMode != 0 && servingMode != 1)
+    servingMode = 1;
+
   
   // start i2c bus for LCD screen
   Wire.begin();
@@ -117,12 +140,20 @@ void setup()
   
   // normal eye color
   eyes(0, 1, 1);
+
+  //Reset the scale to 0
+  scale.tare(); 
+
+  MACRO_PUMP_1_OFF;
+  MACRO_PUMP_2_OFF;
 }
 
 void loop()
 {
+  scale.set_scale(calibration_factor);  //Adjust to this calibration factor
+  
   // debug mode shows the sensor values on lcd
-  if(debugMode)
+  if(debugMode != 0)
   {
     if(debugMode == 1)
     {
@@ -147,11 +178,11 @@ void loop()
       {
         case '1':
           Serial.println("Pump on");
-          MACRO_PUMP_ON;
+          MACRO_PUMP_1_ON;
           break;
         case '2':
           Serial.println("Pump off");
-          MACRO_PUMP_OFF;
+          MACRO_PUMP_1_OFF;
           break;
         case '3':
           Serial.println("LEDs on");
@@ -165,19 +196,19 @@ void loop()
           Serial.println("Debug mode:\n1: pump on\n2: pump off\n3: leds on\n4: leds off\nReset MCU to quit");
       }
     }
-    
     String line1 = "CUP: ";
-    line1 += digitalRead(INPUT_CUP);
-    line1 += ", FLOW: ";
-    line1 += digitalRead(INPUT_FLOW);
+//    line1 += digitalRead(INPUT_CUP);
+//    line1 += ", FLOW: ";
+//    line1 += digitalRead(INPUT_FLOW);
     
     String line2 = "BTN: ";
-    line2 += digitalRead(INPUT_BUTTON);
+    line2 += digitalRead(INPUT_BUTTON_1);
     line2 += ", TOUCH: ";
     line2 += digitalRead(INPUT_ARM_CONTACT);
     
     lcd(line1.c_str(), line2.c_str());
     delay(200);
+    Serial.println(debugMode);
     return;
   }
   // current function to call according to the state machine
@@ -202,20 +233,20 @@ void loop()
         memset(buffer, 0, sizeof(buffer));
         // wait for user input, 16 character or 15 and a "\n" termination character
         Serial.setTimeout(5000);
-        Serial.println("Enter new pouring time in milliseconds");
+        Serial.println("Enter new pouring weight in grams");
         Serial.readBytesUntil('\n', buffer, 15);
-        pouringTime = atoi(buffer);
-        EEPROM.write(EEPROM_POURING_TIME, pouringTime >> 8);
-        EEPROM.write(EEPROM_POURING_TIME + 1, pouringTime & 0xff);
-        Serial.print("New pouring time set ");
-        Serial.print(pouringTime);
-        Serial.println("ms");
+        pouredWeight = atoi(buffer);
+        EEPROM.write(EEPROM_POURING_TIME, pouredWeight >> 8);
+        EEPROM.write(EEPROM_POURING_TIME + 1, pouredWeight & 0xff);
+        Serial.print("New pouring weight set ");
+        Serial.print(pouredWeight);
+        Serial.println(" g");
         Serial.setTimeout(1000);
         break;
       case '2':
-        Serial.print("Current pouring time: ");
+        Serial.print("Current pouring weight: ");
         Serial.print((EEPROM.read(EEPROM_POURING_TIME) << 8) | EEPROM.read(EEPROM_POURING_TIME + 1));
-        Serial.println("ms");
+        Serial.println(" g");
         Serial.print("Serving mode: ");
         Serial.println(EEPROM.read(EEPROM_MODE));
         Serial.print("Serving type: ");
@@ -228,11 +259,11 @@ void loop()
         break;
       case '4':
         Serial.print("Sensors: CUP=");
-        Serial.print(digitalRead(INPUT_CUP));
+    //    Serial.print(digitalRead(INPUT_CUP));
         Serial.print(", ARM_CONTACT=");
         Serial.print(digitalRead(INPUT_ARM_CONTACT));
-        Serial.print(", FLOW=");
-        Serial.println(digitalRead(INPUT_FLOW));
+ //      Serial.print(", FLOW=");
+ //       Serial.println(digitalRead(INPUT_FLOW));
         break;
       case '5':
         Serial.println("Change serving mode: 0 = manual (must click on button), 1 = automatic");
@@ -258,6 +289,33 @@ void loop()
         Serial.println("Entering debug mode, reset MCU to quit.");
         debugMode = 1;
         break;
+      case '8':
+        Serial.println("Cleaning mode");
+        Serial.setTimeout(1000);
+        Serial.println("Will start first pump in two seconds for 15 seconds ");
+        Serial.setTimeout(2000);
+        MACRO_PUMP_1_ON;
+        Serial.setTimeout(15000);
+        MACRO_PUMP_1_OFF;
+        Serial.println("Will start second pump in two seconds for 15 seconds");
+        Serial.setTimeout(2000);
+        MACRO_PUMP_2_ON;
+        Serial.setTimeout(15000);
+        MACRO_PUMP_2_OFF;
+        Serial.println("Take the two tubes out of canisters");
+        Serial.setTimeout(5000);
+        Serial.println("Will start first then second for 10 seconds");
+        MACRO_PUMP_1_ON;
+        Serial.setTimeout(15000);
+        MACRO_PUMP_1_OFF;
+        MACRO_PUMP_1_ON;
+        Serial.setTimeout(15000);
+        MACRO_PUMP_1_OFF;
+        Serial.println("I should be empty");
+        Serial.println("Thanks for cleaning me, see you at the next event !");
+        break;
+
+        
       default:
         Serial.println("Roberto configuration:\n1: set new pouring time\n2: check configuration\n3: read how many times the pump has been activated\n4: show sensor values\n5: change mode (automatic/manual)\n6: change type (Ricard, syrup)\n7: Enable debug mode");
     }
@@ -300,7 +358,7 @@ return_codes stateWaitingCup()
       case 2:
         if(liquidType == TYPE_RICARD)
         {
-          lcd("Je sers du", "RICARD");
+          lcd("Je sers des", "boissons!");
         }
         else if(liquidType == TYPE_SYRUP)
         {
@@ -308,6 +366,7 @@ return_codes stateWaitingCup()
         }
         break;
       case 3:
+
         if(liquidType == TYPE_RICARD)
         {
           lcd("Pour seulement", "7 petits francs");
@@ -318,9 +377,13 @@ return_codes stateWaitingCup()
         }
         break;
     }
+
     
     Serial.println("State: waiting for cup");
-    
+    Serial.println("weight in cup holder ");
+    Serial.print(SCALE_VALUE);
+    Serial.print("  ");
+    Serial.print(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC);
     // toggle the next state, modulo 4
     idleState = (idleState + 1) & 0b11;
     
@@ -343,8 +406,9 @@ return_codes stateWaitingCup()
             lcd(message, "fois servis");
             break;
           case 1:
-            itoa(pouringTime, message, 10);
-            lcd(message, "temps de debit");
+
+            itoa(pouredWeight, message, 10);
+            lcd(message, "masse a debiter");
             break;
         }
         showConfigState = (showConfigState + 1) & 1;
@@ -364,13 +428,13 @@ return_codes stateWaitingCup()
     nextBlink = millis() + 2000 * random(1, 5);
   }
   
-  static uint32_t ledToggleTime = millis() + TIME_HEARTBEAT;
-  if(millis() > ledToggleTime)
-  {
+//  static uint32_t ledToggleTime = millis() + TIME_HEARTBEAT;
+//  if(millis() > ledToggleTime)
+//  {
     // toggle the onboard LED
-    digitalWrite(LED, !digitalRead(LED));
-    ledToggleTime = millis() + TIME_HEARTBEAT;
-  }
+//    digitalWrite(LED, !digitalRead(LED));
+//    ledToggleTime = millis() + TIME_HEARTBEAT;
+//  }
   
   static uint32_t bowTieMoveTime = millis() + TIME_BOWTIEMOVE * random(1, 10);
   if(millis() > bowTieMoveTime)
@@ -407,20 +471,27 @@ return_codes stateWaitingCup()
     }
   }
   
-  if(COND_CUP_IS_PRESENT)
+  if(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC)               
   {
     // turn eyes white
     eyes(1, 1, 1);
-    
+    pastis = 0;
     servoEarLeft.write(SERVO_EAR_LEFT_CENTER);
     servoEarRight.write(SERVO_EAR_RIGHT_CENTER);
     
     if(servingMode == MODE_MANUAL)
     {
       lcd("Goblet insere", "Payer l'humain");
-      while(!COND_BUTTON_PRESSED)
+      while(!COND_BUTTON_1_PRESSED)
       {
-        if(!COND_CUP_IS_PRESENT)
+        pastis = 1;
+        if(COND_BUTTON_2_PRESSED)
+        {
+          pastis = 0;
+          Serial.println("Button 2 has been pressed.");
+          return OK;
+        }
+        if(!(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
         {
           return REPEAT;
         }
@@ -436,32 +507,29 @@ return_codes stateWaitingCup()
   }
   return REPEAT;
 }
-
 return_codes stateMovingArmsIn()
 {
   Serial.println("State: moving arms in");
-  
-  if(liquidType == TYPE_RICARD)
+
+  if(pastis == 1)
   {
-    lcd("Et un Ricard", "un vrai!");
+    lcd("Et un cocktail", "un vrai!");
   }
-  else if(liquidType == TYPE_SYRUP)
+  else if(pastis == 0)
   {
-    lcd("Et voila un", "bon sirop");
+    lcd("Et voila un bon", "sirop!");
   }
-  
   // do not move right away
   uint32_t waitAfterCut = millis() + TIME_WAIT_AFTER_CUP_INSERT;
   while(waitAfterCut > millis())
   {
-    if(!COND_CUP_IS_PRESENT)
+    if(!(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
     {
       lcd("Erreur: goblet", "enleve");
       Serial.println("Error: cup was removed");
       return FAIL;
     }
   }
-  
   // move arms in
   moveArmServo(servoArmLeft, SERVO_ARM_LEFT_CLOSED, SERVO_ARM_SPEED);
   moveArmServo(servoArmRight, SERVO_ARM_RIGHT_CLOSED, SERVO_ARM_SPEED);
@@ -477,7 +545,7 @@ return_codes stateMovingArmsIn()
       return FAIL;
     }
     
-    if(!COND_CUP_IS_PRESENT)
+    if(!(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
     {
       lcd("Erreur: goblet", "enleve");
       Serial.println("Error: cup was removed");
@@ -492,38 +560,48 @@ return_codes statePouring()
 {
   // the liquid has reached the flow sensor, start timing, make sure cup is still there
   uint32_t start = millis();
-  uint32_t time = start + pouringTime;
+//  uint32_t time = start + pouringTime;
   uint32_t bowTieTime = start + TIME_BOWTIE_TOGGLE;
   uint32_t now;
   uint8_t percent;
   char progress[4];
   
-  LED_OFF;
+//  LED_OFF;
   
   Serial.println("State: pouring");
   eyes(0, 1, 0);
-  
-  MACRO_PUMP_ON;
-
+  if(pastis)
+  {
+    MACRO_PUMP_1_ON;
+    MACRO_PUMP_2_OFF;
+  }
+  else
+  { 
+    MACRO_PUMP_2_ON;
+    MACRO_PUMP_1_OFF;
+  }
   // timeout if there's no liquid after some time
   uint32_t timeout = millis() + TIME_LIQUID_SENSOR_REACH;
-  while(!COND_LIQUID_DETECT)
+  uint32_t MassCupEmpty = SCALE_VALUE;
+  while(!((MassCupEmpty + 2) > SCALE_VALUE))        //!!!  interval of +2 incase of noise will need to change with the movement                                
   {
     // arms can be blocked, so a timeout is needed
     if(millis() > timeout)
     {
       eyes(1, 0, 0);
-      MACRO_PUMP_OFF;
+      MACRO_PUMP_1_OFF;
+      MACRO_PUMP_2_OFF;
       lcd("Erreur: timeout", "liquide");
       Serial.println("Error: timeout while pumping liquid");
       return FAIL;
     }
     
     // check for cup presence
-    if(!COND_CUP_IS_PRESENT)
+    if(!(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
     {
       eyes(1, 0, 0);
-      MACRO_PUMP_OFF;
+      MACRO_PUMP_1_OFF;
+      MACRO_PUMP_2_OFF;
       lcd("Erreur: goblet", "enleve");
       Serial.println("Error: cup was removed");
       delay(TIME_EAR_MOVE_CUP_REMOVE);
@@ -532,20 +610,22 @@ return_codes statePouring()
   }
   
   // turn on the LED to indicate when the sensor detected the liquid
-  LED_ON;
+//  LED_ON;
   
   // actually start pouring
   start = millis();
-  time = start + pouringTime;
+//  time = start + pouringTime;
   bowTieTime = start + TIME_BOWTIE_TOGGLE;
-  while((now = millis()) < time)
+  uint32_t MassCupFull = MassCupEmpty + pouredWeight;
+  while(SCALE_VALUE < MassCupFull)
   {
     // check for cup presence
-    if(!COND_CUP_IS_PRESENT)
+    if(!(SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
     {
       eyes(1, 0, 0);
       // stop pump
-      MACRO_PUMP_OFF;
+      MACRO_PUMP_1_OFF;
+      MACRO_PUMP_2_OFF;
       // reset bow tie
       servoBowTie.write(SERVO_BOWTIE_CENTER);
       lcd("Erreur: goblet", "enleve");
@@ -568,7 +648,7 @@ return_codes statePouring()
       }
       
       // display feedback on lcd: in % when pouring and timeout in case of fail
-      percent = 100 * (now - start) / pouringTime;
+      percent = 100 * (SCALE_VALUE - MassCupEmpty) / pouredWeight;
       memset(progress, 0, sizeof(progress));
       itoa(percent, progress, 10);
       if(percent < 10)
@@ -589,18 +669,19 @@ return_codes statePouring()
       Serial.println(progress);
       
       // also toggle the led
-      digitalWrite(LED, !digitalRead(LED));
+//      digitalWrite(LED, !digitalRead(LED));
       bowTieTime = millis() + TIME_BOWTIE_TOGGLE;
     }
   }
   
   lcd("Preparation", "100%");
   
-  // shut off the pump
-  MACRO_PUMP_OFF;
+  // shut off the pumps
+  MACRO_PUMP_1_OFF;
+  MACRO_PUMP_2_OFF;
   
   // turn the LED off to show when exactly the pump was turned off
-  LED_OFF;
+//  LED_OFF;
   
   // put bow tie back to center
   servoBowTie.write(SERVO_BOWTIE_CENTER);
@@ -625,8 +706,11 @@ return_codes stateMovingRightArmOut()
   
   // display information on the lcd
   lcd("C'est pret!", "...");
+
+  Serial.println("Weight in hand after serving is ");
+  Serial.print(SCALE_VALUE);
   
-  moveArmServo(servoArmLeft, SERVO_ARM_LEFT_HALF_OPEN, SERVO_ARM_SPEED);
+ // moveArmServo(servoArmLeft, SERVO_ARM_LEFT_HALF_OPEN, SERVO_ARM_SPEED);
   moveArmServo(servoArmRight, SERVO_ARM_RIGHT_OPEN, SERVO_ARM_SPEED);
   
   return OK;
@@ -651,7 +735,7 @@ return_codes stateRemoveCup()
   while(timeout > millis())
   {
     // cup is still in the robot hand
-    if(COND_CUP_IS_PRESENT)
+    if((SCALE_VALUE > MIN_VAL_MASS_CUP_DETEC))
     {
       timeout = millis() + TIME_WAIT_AFTER_CUP_REMOVE;
     }

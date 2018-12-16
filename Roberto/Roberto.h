@@ -1,8 +1,8 @@
 /***************************************************************************************
  *
  * Title:       Roberto, the pastis serving robot
- * Version:     v1.0
- * Date:        2014-05-27
+ * Version:     v1.1
+ * Date:        2018-12-16
  * Author:      Karl Kangur <karl.kangur@gmail.com>
  * Website:     https://github.com/Robopoly/Roberto
  * Licence:     LGPL
@@ -11,18 +11,16 @@
 #ifndef ROBERTO_H
 #define ROBERTO_H
 
-#define LED 13
-
 // servo motor positions
 #define SERVO_ARM_LEFT_OPEN 60
 #define SERVO_ARM_LEFT_HALF_OPEN 140
-#define SERVO_ARM_LEFT_CLOSED 154
+#define SERVO_ARM_LEFT_CLOSED 152 // was 154
 #define SERVO_ARM_RIGHT_OPEN 140
-#define SERVO_ARM_RIGHT_CLOSED 35
+#define SERVO_ARM_RIGHT_CLOSED 38 // was 35
 #define SERVO_BOWTIE_CENTER 66
 #define SERVO_BOWTIE_RIGHT SERVO_BOWTIE_CENTER + 20
 #define SERVO_BOWTIE_LEFT SERVO_BOWTIE_CENTER - 20
-#define SERVO_EAR_RIGHT_CENTER 90
+#define SERVO_EAR_RIGHT_CENTER 70
 #define SERVO_EAR_RIGHT_FORWARDS SERVO_EAR_RIGHT_CENTER + 30
 #define SERVO_EAR_RIGHT_BACK SERVO_EAR_RIGHT_CENTER - 30
 #define SERVO_EAR_LEFT_CENTER 100
@@ -36,7 +34,7 @@
 #define TIME_BOWTIE_TOGGLE 500
 #define TIME_BOWTIEMOVE 2000
 #define TIME_LIQUID_SENSOR_REACH 2000
-#define TIME_DRIP_WAIT 5000
+#define TIME_DRIP_WAIT 2500
 #define TIME_WAIT_AFTER_CUP_REMOVE 2000
 #define TIME_LCD_UPDATE 2000
 #define TIME_LED_DISCO 200
@@ -53,38 +51,58 @@
 #define EEPROM_MODE 4 // 0 = manual, 1 = automatic
 #define EEPROM_TYPE 5 // 0 = Ricard, 1 = Syrup
 
+// User input timings
+#define TIMEOUT_STANDARD 1000
+#define TIMEOUT_INPUT 5000
+
 #define TYPE_RICARD 0
 #define TYPE_SYRUP 1
+#define TYPE_COCKTAILS 2                    
 
 #define MODE_MANUAL 0
 #define MODE_AUTOMATIC 1
 
-// input pin definitions
-#define INPUT_CUP          0
-#define INPUT_FLOW         1
-#define INPUT_BUTTON       10
-#define INPUT_ARM_CONTACT  11
-
+// input pin definitions         
+#define INPUT_BUTTON_1          10         
+#define INPUT_BUTTON_2          11                     
+#define INPUT_ARM_CONTACT       0
+#define INPUT_SCALE_DAT         13          
+#define INPUT_SCALE_CLK         12 
+         
 // output pin definitions
-#define OUTPUT_PUMP        9
-#define OUTPUT_EYE_LEFT_RED    A2
-#define OUTPUT_EYE_LEFT_GREEN  A1
-#define OUTPUT_EYE_LEFT_BLUE   A0
-#define OUTPUT_EYE_RIGHT_RED    A5
-#define OUTPUT_EYE_RIGHT_GREEN  A4
-#define OUTPUT_EYE_RIGHT_BLUE   A3
+#define OUTPUT_PUMP_1           9
+#define OUTPUT_PUMP_2           1
+#define OUTPUT_EYE_LEFT_RED     A3 
+#define OUTPUT_EYE_LEFT_GREEN   A4 
+#define OUTPUT_EYE_LEFT_BLUE    A5
+
+#define OUTPUT_EYE_RIGHT_RED    A0 
+#define OUTPUT_EYE_RIGHT_GREEN  A1 
+#define OUTPUT_EYE_RIGHT_BLUE   A2
+
+#define OUTPUT_SERVO_ARM_LEFT   4
+#define OUTPUT_SERVO_ARM_RIGHT  5
+#define OUTPUT_SERVO_BOWTIE     6
+#define OUTPUT_SERVO_LEFT_EAR   7
+#define OUTPUT_SERVO_RIGHT_EAR  8
+
 
 // condition macros
-#define COND_CUP_IS_PRESENT digitalRead(INPUT_CUP)
-#define COND_ARMS_TOUCH digitalRead(INPUT_ARM_CONTACT)
-#define COND_LIQUID_DETECT digitalRead(INPUT_FLOW)
-#define COND_BUTTON_PRESSED digitalRead(INPUT_BUTTON)
+#define SCALE_VALUE             scale.get_units()
+#define MIN_VAL_MASS_CUP_DETEC  2.0                          //less than the mass of a light PP Cup
+#define MAX_POURED_WEIGHT       250
+#define DEFAULT_POURED_WEIGHT   150                          //mass in gram 
 
-// othe macros
-#define MACRO_PUMP_ON digitalWrite(OUTPUT_PUMP, HIGH)
-#define MACRO_PUMP_OFF digitalWrite(OUTPUT_PUMP, LOW)
-#define LED_ON digitalWrite(LED, HIGH)
-#define LED_OFF digitalWrite(LED, LOW)
+#define COND_ARMS_TOUCH digitalRead(INPUT_ARM_CONTACT)
+
+#define COND_BUTTON_1_PRESSED !digitalRead(INPUT_BUTTON_1) 
+#define COND_BUTTON_2_PRESSED !digitalRead(INPUT_BUTTON_2)
+
+// other macros
+#define MACRO_PUMP_1_ON digitalWrite(OUTPUT_PUMP_1, HIGH)
+#define MACRO_PUMP_1_OFF digitalWrite(OUTPUT_PUMP_1, LOW)
+#define MACRO_PUMP_2_ON digitalWrite(OUTPUT_PUMP_2, HIGH)
+#define MACRO_PUMP_2_OFF digitalWrite(OUTPUT_PUMP_2, LOW)
 
 enum state_codes
 {
@@ -105,5 +123,11 @@ enum return_codes
 
 #define ENTRY_STATE STATE_WAITING_CUP
 
-#endif
+  return_codes stateWaitingCup();
+  return_codes stateMovingArmsIn();
+  return_codes statePouring();
+  return_codes stateMovingRightArmOut();
+  return_codes stateRemoveCup();
+  return_codes stateMovingArmsOut();
 
+#endif
